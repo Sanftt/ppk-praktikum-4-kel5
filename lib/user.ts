@@ -1,4 +1,4 @@
-import bcrypt from "bcrypt";
+import bcrypt from "bcrypt"; 
 import { prisma } from "./prisma";
 
 export async function getUsers() {

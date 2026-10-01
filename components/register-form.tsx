@@ -9,12 +9,6 @@ export default function AddUserForm() {
   const [isPending, startTransition] = useTransition();
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
-  const accessOptions = [
-    { id: 'read', label: 'Read' },
-    { id: 'write', label: 'Write' },
-    { id: 'delete', label: 'Delete' },
-    { id: 'admin', label: 'Admin' },
-  ];
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -27,9 +21,8 @@ export default function AddUserForm() {
         const result = await addUser(formData);
         
         if (result.success) {
-          setNotification({ type: 'success', message: result.message || 'Berhasil!' });
-          form.reset(); // Reset form jika sukses
-          router.refresh(); // Refresh halaman agar data terbaru tampil di tabel
+          router.push('/login');
+          router.refresh();
         } else {
           setNotification({ type: 'error', message: result.error || 'Terjadi kesalahan.' });
         }
@@ -40,16 +33,10 @@ export default function AddUserForm() {
   }
 
   return (
-    <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 max-w-md w-full">
-      <h2 className="text-xl font-semibold mb-6 text-gray-800">Tambah User Baru</h2>
-
-      {notification && (
+    <div className="bg-white py-8 px-6 shadow sm:rounded-lg sm:px-10 w-full border border-gray-100">
+      {notification?.type === 'error' && (
         <div 
-          className={`p-4 mb-6 rounded-lg text-sm font-medium ${
-            notification.type === 'success' 
-              ? 'bg-green-50 text-green-700 border border-green-200' 
-              : 'bg-red-50 text-red-700 border border-red-200'
-          }`}
+          className="p-4 mb-6 rounded-lg text-sm font-medium bg-red-50 text-red-700 border border-red-200"
         >
           {notification.message}
         </div>
@@ -66,7 +53,7 @@ export default function AddUserForm() {
             name="username"
             required
             placeholder="Masukkan username"
-            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+            className="w-full px-4 py-2 text-black bg-white border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
           />
         </div>
 
@@ -80,34 +67,10 @@ export default function AddUserForm() {
             name="password"
             required
             placeholder="••••••••"
-            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+            className="w-full px-4 py-2 text-black bg-white border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
           />
         </div>
 
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">
-            List Access (Hak Akses)
-          </label>
-          <div className="space-y-2">
-            {accessOptions.map((option) => (
-              <div key={option.id} className="flex items-center">
-                <input
-                  type="checkbox"
-                  id={`access-${option.id}`}
-                  name="list_access"
-                  value={option.id}
-                  className="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500"
-                />
-                <label
-                  htmlFor={`access-${option.id}`}
-                  className="ml-2 text-sm font-medium text-gray-700 cursor-pointer"
-                >
-                  {option.label}
-                </label>
-              </div>
-            ))}
-          </div>
-        </div>
 
         <button
           type="submit"

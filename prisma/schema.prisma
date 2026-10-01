@@ -8,18 +8,66 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+
+
 model User {
-
-  id String @id @default(uuid())
-
-  username String @unique
-
-  password String
-
-  list_access String?
+  id        String   @id @default(uuid())
+  username  String   @unique
+  password  String
 
   createdAt DateTime @default(now())
-
   updatedAt DateTime @updatedAt
 
+  createdLists   List[]         @relation("ListCreator")
+  transactions  Transaction[]
+  collaborations Collaborator[]
+}
+
+enum TransactionType {
+  INCOME
+  EXPENSE
+}
+
+model Transaction {
+  id          String   @id @default(uuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type        TransactionType
+  amount      Float
+  description String
+  date        DateTime @default(now())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model List {
+  id         String   @id @default(uuid())
+  title      String
+  creator_id String
+  creator    User     @relation("ListCreator", fields: [creator_id], references: [id])
+  deadline   DateTime?
+  createdAt  DateTime @default(now())
+
+  tasks         Task[]
+  collaborators Collaborator[]
+}
+
+model Task {
+  id          String   @id @default(uuid())
+  list_id     String
+  list        List     @relation(fields: [list_id], references: [id], onDelete: Cascade)
+  task_name   String
+  is_priority Boolean  @default(false)
+  deadline    DateTime?
+}
+
+model Collaborator {
+  id      String @id @default(uuid())
+  user_id String
+  list_id String
+
+  user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  list List @relation(fields: [list_id], references: [id], onDelete: Cascade)
+
+  @@unique([user_id, list_id])
 }
