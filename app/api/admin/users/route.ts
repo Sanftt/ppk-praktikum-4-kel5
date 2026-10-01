@@ -23,7 +23,7 @@ export async function POST(request: Request) {
     const user = await addUser({
       username: body.username,
       password: body.password,
-      role: body.role,
+      list_access: body.list_access,
     });
     return NextResponse.json(
       {
