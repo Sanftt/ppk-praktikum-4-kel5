@@ -21,8 +21,8 @@ export async function addUser(formData: FormData) {
       success: true,
       message: "User berhasil ditambahkan, silahkan login.",
     };
-  } catch (error: any) {
-    if (error.code === "P2002") {
+  } catch (error: unknown) {
+    if (error && typeof error === "object" && "code" in error && error.code === "P2002") {
       return { success: false, error: "Username sudah digunakan" };
     }
     return { success: false, error: "Terjadi kesalahan saat menambahkan user" };
@@ -110,3 +110,98 @@ export async function toggleThemePreference() {
   cookieStore.set("theme", newTheme, { maxAge: 60 * 60 * 24 * 365, path: "/" });
   revalidatePath("/dashboard");
 }
+
+import {
+  createBudget as dbCreateBudget,
+  updateBudget as dbUpdateBudget,
+  deleteBudget as dbDeleteBudget,
+  getBudgetStats as dbGetBudgetStats,
+  BudgetError,
+} from "./budget";
+
+export async function createBudgetAction(data: {
+  month: number;
+  year: number;
+  budgetAmount: number;
+}) {
+  const session = await getSession();
+  if (!session?.userId) {
+    return { success: false, error: "Unauthorized" };
+  }
+
+  try {
+    const budget = await dbCreateBudget({
+      userId: session.userId,
+      month: data.month,
+      year: data.year,
+      budgetAmount: data.budgetAmount,
+    });
+    revalidatePath("/dashboard");
+    return { success: true, data: budget };
+  } catch (error: unknown) {
+    if (error instanceof BudgetError && error.code === "P2002") {
+      return {
+        success: false,
+        error: "Budget untuk bulan dan tahun ini sudah ada",
+      };
+    }
+    const message = error instanceof Error ? error.message : "Gagal membuat budget";
+    return { success: false, error: message };
+  }
+}
+
+export async function updateBudgetAction(data: {
+  id: string;
+  budgetAmount?: number;
+  month?: number;
+  year?: number;
+}) {
+  const session = await getSession();
+  if (!session?.userId) {
+    return { success: false, error: "Unauthorized" };
+  }
+
+  try {
+    const updated = await dbUpdateBudget({
+      ...data,
+      userId: session.userId,
+    });
+    revalidatePath("/dashboard");
+    return { success: true, data: updated };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Gagal memperbarui budget";
+    return { success: false, error: message };
+  }
+}
+
+export async function deleteBudgetAction(id: string) {
+  const session = await getSession();
+  if (!session?.userId) {
+    return { success: false, error: "Unauthorized" };
+  }
+
+  try {
+    await dbDeleteBudget(id, session.userId);
+    revalidatePath("/dashboard");
+    return { success: true };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Gagal menghapus budget";
+    return { success: false, error: message };
+  }
+}
+
+export async function getBudgetStatsAction(month: number, year: number) {
+  const session = await getSession();
+  if (!session?.userId) {
+    return { success: false, error: "Unauthorized" };
+  }
+
+  try {
+    const stats = await dbGetBudgetStats(session.userId, month, year);
+    return { success: true, data: stats };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Gagal mengambil statistik budget";
+    return { success: false, error: message };
+  }
+}
+

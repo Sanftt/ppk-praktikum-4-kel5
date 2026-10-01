@@ -14,6 +14,7 @@ model User {
   id        String   @id @default(uuid())
   username  String   @unique
   password  String
+  list_access String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -21,6 +22,21 @@ model User {
   createdLists   List[]         @relation("ListCreator")
   transactions  Transaction[]
   collaborations Collaborator[]
+  monthlyBudgets MonthlyBudget[]
+}
+
+model MonthlyBudget {
+  id           String   @id @default(uuid())
+  userId       String   @map("user_id")
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  month        Int
+  year         Int
+  budgetAmount Float    @map("budget_amount")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@unique([userId, month, year])
+  @@map("monthly_budgets")
 }
 
 enum TransactionType {
