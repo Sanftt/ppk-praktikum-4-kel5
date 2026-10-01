@@ -1,138 +1,199 @@
 import assert from "node:assert";
+import {
+  getJakartaYearMonth,
+  getJakartaMonthRange,
+  type MonthlyBudgetSummary,
+  type BudgetActionResult,
+} from "../lib/budget";
 
-// 1. Test Rumus Perhitungan & Status
-function calculateBudgetStats(
-  budgetAmount: number,
-  expenseAmounts: number[]
-) {
-  const totalExpense = expenseAmounts.reduce((acc, curr) => acc + curr, 0);
-  const remainingBudget = budgetAmount - totalExpense;
-  const percentage = budgetAmount > 0 ? (totalExpense / budgetAmount) * 100 : 0;
+console.log("=== MENJALANKAN PENGUJIAN SESUAI SRS PROGRAMMER 1 ===");
 
-  let status: "SAFE" | "WARNING" | "DANGER" = "SAFE";
-  let statusLabel = "Aman";
-
-  if (budgetAmount > 0) {
-    if (percentage >= 100) {
-      status = "DANGER";
-      statusLabel = "Melebihi anggaran";
-    } else if (percentage >= 75) {
-      status = "WARNING";
-      statusLabel = "Mendekati batas";
-    } else {
-      status = "SAFE";
-      statusLabel = "Aman";
-    }
-  } else if (totalExpense > 0) {
-    status = "DANGER";
-    statusLabel = "Melebihi anggaran (Belum ada budget)";
-  }
-
-  return {
-    totalBudget: budgetAmount,
-    totalExpense,
-    remainingBudget,
-    percentage: Number(percentage.toFixed(2)),
-    status,
-    statusLabel,
+// 1. Uji Kontrak TypeScript
+{
+  const summary: MonthlyBudgetSummary = {
+    year: 2026,
+    month: 10,
+    budgetAmount: 1500000,
+    spentAmount: 750000,
+    remainingAmount: 750000,
+    usagePercentage: 50,
+    status: "NORMAL",
   };
+  assert.strictEqual(summary.status, "NORMAL");
+
+  const successResult: BudgetActionResult = { success: true };
+  const failResult: BudgetActionResult = { success: false, error: "Unauthorized" };
+  assert.strictEqual(successResult.success, true);
+  assert.strictEqual(failResult.success, false);
+
+  // Test getJakartaYearMonth
+  const ym = getJakartaYearMonth(new Date("2026-10-01T00:00:00.000Z"));
+  assert.strictEqual(ym.year, 2026);
+  assert.strictEqual(ym.month, 10);
+  console.log("✔ Test 1: Kontrak TypeScript MonthlyBudgetSummary & BudgetActionResult PASSED");
 }
 
-console.log("=== RUNNING BUDGET BACKEND LOGIC & SECURITY TESTS ===");
-
-// Test 1: Skenario Aman (Pengeluaran 50%)
+// 2. Uji Batas Pergantian Bulan Asia/Jakarta (WIB = UTC+7)
 {
-  const stats = calculateBudgetStats(2000000, [500000, 500000]);
-  assert.strictEqual(stats.totalExpense, 1000000, "Total pengeluaran harus 1.000.000");
-  assert.strictEqual(stats.remainingBudget, 1000000, "Sisa budget harus 1.000.000");
-  assert.strictEqual(stats.percentage, 50, "Persentase harus 50%");
-  assert.strictEqual(stats.status, "SAFE", "Status harus SAFE");
-  assert.strictEqual(stats.statusLabel, "Aman", "Status label harus Aman");
-  console.log("✔ Test 1: Status Aman (<= 75%) PASSED");
+  const { start, end } = getJakartaMonthRange(2026, 10);
+
+  // Awal bulan 2026-10-01 00:00:00 WIB adalah 2026-09-30 17:00:00 UTC
+  assert.strictEqual(start.toISOString(), "2026-09-30T17:00:00.000Z");
+
+  // Awal bulan berikutnya 2026-11-01 00:00:00 WIB adalah 2026-10-31 17:00:00 UTC (eksklusif)
+  assert.strictEqual(end.toISOString(), "2026-10-31T17:00:00.000Z");
+
+  // Transaksi 1 detik sebelum awal Oktober (2026-09-30 23:59:59 WIB = 16:59:59 UTC) -> Di luar
+  const beforeStart = new Date("2026-09-30T16:59:59.000Z");
+  assert.strictEqual(beforeStart >= start && beforeStart < end, false);
+
+  // Tepat saat awal Oktober (2026-10-01 00:00:00 WIB = 17:00:00 UTC) -> Masuk (inklusif)
+  const exactStart = new Date("2026-09-30T17:00:00.000Z");
+  assert.strictEqual(exactStart >= start && exactStart < end, true);
+
+  // Akhir Oktober (2026-10-31 23:59:59 WIB = 16:59:59 UTC) -> Masuk
+  const endOfOct = new Date("2026-10-31T16:59:59.000Z");
+  assert.strictEqual(endOfOct >= start && endOfOct < end, true);
+
+  // Tepat awal November (2026-11-01 00:00:00 WIB = 17:00:00 UTC) -> Di luar (eksklusif)
+  const exactNextMonth = new Date("2026-10-31T17:00:00.000Z");
+  assert.strictEqual(exactNextMonth >= start && exactNextMonth < end, false);
+
+  console.log("✔ Test 2: Batas Pergantian Bulan Asia/Jakarta (Inklusif awal & Eksklusif awal bulan berikutnya) PASSED");
 }
 
-// Test 2: Skenario Mendekati Batas (Pengeluaran 80%)
+// 3. Uji Perhitungan Status Ambang Batas (NORMAL < 80%, WARNING >= 80% & < 100%, EXCEEDED >= 100%)
 {
-  const stats = calculateBudgetStats(1000000, [800000]);
-  assert.strictEqual(stats.totalExpense, 800000);
-  assert.strictEqual(stats.remainingBudget, 200000);
-  assert.strictEqual(stats.percentage, 80);
-  assert.strictEqual(stats.status, "WARNING");
-  assert.strictEqual(stats.statusLabel, "Mendekati batas");
-  console.log("✔ Test 2: Status Mendekati Batas (75% - 99%) PASSED");
-}
+  function computeSummary(budgetAmount: number | null, spentAmount: number): MonthlyBudgetSummary {
+    if (budgetAmount === null) {
+      return {
+        year: 2026,
+        month: 10,
+        budgetAmount: null,
+        spentAmount,
+        remainingAmount: null,
+        usagePercentage: null,
+        status: "NO_BUDGET",
+      };
+    }
 
-// Test 3: Skenario Melebihi Anggaran (Pengeluaran 120%)
-{
-  const stats = calculateBudgetStats(1000000, [700000, 500000]);
-  assert.strictEqual(stats.totalExpense, 1200000);
-  assert.strictEqual(stats.remainingBudget, -200000, "Sisa harus bernilai negatif bila defisit");
-  assert.strictEqual(stats.percentage, 120);
-  assert.strictEqual(stats.status, "DANGER");
-  assert.strictEqual(stats.statusLabel, "Melebihi anggaran");
-  console.log("✔ Test 3: Status Melebihi Anggaran (>= 100%) PASSED");
-}
+    const remainingAmount = budgetAmount - spentAmount;
+    const usagePercentage = budgetAmount > 0 ? (spentAmount / budgetAmount) * 100 : 0;
 
-// Test 4: Validasi Input Budget
-function validateBudgetInput(month: unknown, year: unknown, budgetAmount: unknown) {
-  if (!month || typeof month !== "number" || month < 1 || month > 12) {
-    return { valid: false, error: "Bulan harus antara 1 dan 12" };
+    let status: "NORMAL" | "WARNING" | "EXCEEDED" = "NORMAL";
+    if (usagePercentage >= 100) {
+      status = "EXCEEDED";
+    } else if (usagePercentage >= 80) {
+      status = "WARNING";
+    } else {
+      status = "NORMAL";
+    }
+
+    return {
+      year: 2026,
+      month: 10,
+      budgetAmount,
+      spentAmount,
+      remainingAmount,
+      usagePercentage,
+      status,
+    };
   }
-  if (!year || typeof year !== "number" || year < 2000 || year > 2100) {
-    return { valid: false, error: "Tahun tidak valid" };
-  }
-  if (budgetAmount === undefined || typeof budgetAmount !== "number" || budgetAmount <= 0) {
-    return { valid: false, error: "Nominal harus lebih besar dari 0" };
-  }
-  return { valid: true };
+
+  // Skenario Bulan Kosong (NO_BUDGET)
+  const noBudget = computeSummary(null, 250000);
+  assert.strictEqual(noBudget.status, "NO_BUDGET");
+  assert.strictEqual(noBudget.budgetAmount, null);
+  assert.strictEqual(noBudget.remainingAmount, null);
+  assert.strictEqual(noBudget.usagePercentage, null);
+  assert.strictEqual(noBudget.spentAmount, 250000);
+
+  // Skenario NORMAL (< 80%)
+  const normal = computeSummary(1000000, 790000);
+  assert.strictEqual(normal.status, "NORMAL");
+  assert.strictEqual(normal.remainingAmount, 210000);
+  assert.strictEqual(normal.usagePercentage, 79);
+
+  // Skenario WARNING (Tepat 80% & 99.9%)
+  const warning80 = computeSummary(1000000, 800000);
+  assert.strictEqual(warning80.status, "WARNING");
+  assert.strictEqual(warning80.remainingAmount, 200000);
+  assert.strictEqual(warning80.usagePercentage, 80);
+
+  const warning99 = computeSummary(1000000, 999000);
+  assert.strictEqual(warning99.status, "WARNING");
+
+  // Skenario EXCEEDED (Tepat 100% & Defisit 120%)
+  const exceeded100 = computeSummary(1000000, 1000000);
+  assert.strictEqual(exceeded100.status, "EXCEEDED");
+  assert.strictEqual(exceeded100.remainingAmount, 0);
+
+  const exceeded120 = computeSummary(1000000, 1200000);
+  assert.strictEqual(exceeded120.status, "EXCEEDED");
+  assert.strictEqual(exceeded120.remainingAmount, -200000);
+
+  console.log("✔ Test 3: Ambang Batas Status (NO_BUDGET, NORMAL, WARNING, EXCEEDED) PASSED");
 }
 
+// 4. Uji Bulan dengan Income dan Expense (Hanya EXPENSE yang dihitung)
 {
-  assert.strictEqual(validateBudgetInput(0, 2026, 100000).valid, false);
-  assert.strictEqual(validateBudgetInput(13, 2026, 100000).valid, false);
-  assert.strictEqual(validateBudgetInput(5, 1999, 100000).valid, false);
-  assert.strictEqual(validateBudgetInput(5, 2026, 0).valid, false);
-  assert.strictEqual(validateBudgetInput(5, 2026, -50000).valid, false);
-  assert.strictEqual(validateBudgetInput(5, 2026, 500000).valid, true);
-  console.log("✔ Test 4: Validasi Input (Bulan, Tahun, Nominal > 0) PASSED");
-}
-
-// Test 5: Simulasi Isolasi Akses Pengguna (Data Authorization)
-{
-  type BudgetRecord = { id: string; userId: string; month: number; year: number; amount: number };
-  const mockDb: BudgetRecord[] = [
-    { id: "b1", userId: "user-alpha", month: 10, year: 2026, amount: 2000000 },
-    { id: "b2", userId: "user-beta", month: 10, year: 2026, amount: 3500000 },
+  type Tx = { type: "INCOME" | "EXPENSE"; amount: number };
+  const transactions: Tx[] = [
+    { type: "INCOME", amount: 5000000 },
+    { type: "EXPENSE", amount: 200000 },
+    { type: "EXPENSE", amount: 300000 },
+    { type: "INCOME", amount: 1000000 },
   ];
 
-  // User Alpha hanya boleh dapat miliknya
-  const alphaBudgets = mockDb.filter((b) => b.userId === "user-alpha");
-  assert.strictEqual(alphaBudgets.length, 1);
-  assert.strictEqual(alphaBudgets[0].id, "b1");
+  const totalExpense = transactions
+    .filter((t) => t.type === "EXPENSE")
+    .reduce((acc, t) => acc + t.amount, 0);
 
-  // User Alpha mencoba akses id "b2" milik Beta
-  const targetId = "b2";
-  const userAccess = mockDb.find((b) => b.id === targetId && b.userId === "user-alpha");
-  assert.strictEqual(userAccess, undefined, "User Alpha tidak boleh mengakses budget milik Beta");
-
-  // User Alpha mencoba hapus "b2" milik Beta
-  const deleteCount = mockDb.filter((b) => b.id === targetId && b.userId === "user-alpha").length;
-  assert.strictEqual(deleteCount, 0, "User Alpha tidak boleh menghapus budget milik Beta");
-
-  console.log("✔ Test 5: Isolasi Otorisasi Antar Pengguna PASSED");
+  assert.strictEqual(totalExpense, 500000, "Hanya transaksi EXPENSE yang dijumlahkan");
+  console.log("✔ Test 4: Filter Transaksi (Hanya EXPENSE, INCOME diabaikan) PASSED");
 }
 
-// Test 6: Pencegahan Budget Ganda untuk Bulan & Tahun yang Sama
+// 5. Uji Validasi Nominal Budget
 {
-  const userBudgets = [{ userId: "user-alpha", month: 10, year: 2026 }];
-  const isDuplicate = (userId: string, month: number, year: number) => {
-    return userBudgets.some((b) => b.userId === userId && b.month === month && b.year === year);
-  };
+  function validateAmount(amount: unknown): boolean {
+    return typeof amount === "number" && Number.isSafeInteger(amount) && amount > 0;
+  }
 
-  assert.strictEqual(isDuplicate("user-alpha", 10, 2026), true, "Harus menolak duplikasi bulan 10 tahun 2026");
-  assert.strictEqual(isDuplicate("user-alpha", 11, 2026), false, "Bulan lain diperbolehkan");
-  assert.strictEqual(isDuplicate("user-beta", 10, 2026), false, "User lain boleh membuat di bulan yang sama");
-  console.log("✔ Test 6: Pencegahan Budget Ganda per User/Bulan/Tahun PASSED");
+  assert.strictEqual(validateAmount(0), false);
+  assert.strictEqual(validateAmount(-100000), false);
+  assert.strictEqual(validateAmount(1000.5), false); // Desimal tidak diperbolehkan (harus integer)
+  assert.strictEqual(validateAmount("500000"), false);
+  assert.strictEqual(validateAmount(null), false);
+  assert.strictEqual(validateAmount(undefined), false);
+  assert.strictEqual(validateAmount(1000000), true);
+  console.log("✔ Test 5: Validasi Nominal Budget (Integer aman > 0) PASSED");
 }
 
-console.log("\n Semua tes unit logika dan otorisasi Backend berhasil 100%!");
+// 6. Uji Isolasi Dua Pengguna & Otorisasi
+{
+  type BudgetRecord = { userId: string; year: number; month: number; budgetAmount: number };
+  const dbBudgets: BudgetRecord[] = [
+    { userId: "user-1", year: 2026, month: 10, budgetAmount: 2000000 },
+    { userId: "user-2", year: 2026, month: 10, budgetAmount: 4000000 },
+  ];
+
+  // User 1 hanya melihat budget miliknya
+  const user1Budget = dbBudgets.find((b) => b.userId === "user-1" && b.year === 2026 && b.month === 10);
+  assert.strictEqual(user1Budget?.budgetAmount, 2000000);
+
+  // User 1 tidak dapat mengakses budget User 2
+  const unauthorizedAccess = dbBudgets.find((b) => b.userId === "user-1" && b.budgetAmount === 4000000);
+  assert.strictEqual(unauthorizedAccess, undefined);
+
+  // Uji unique constraint (userId, year, month)
+  const isDuplicate = (userId: string, year: number, month: number) => {
+    return dbBudgets.some((b) => b.userId === userId && b.year === year && b.month === month);
+  };
+  assert.strictEqual(isDuplicate("user-1", 2026, 10), true);
+  assert.strictEqual(isDuplicate("user-1", 2026, 11), false);
+  assert.strictEqual(isDuplicate("user-2", 2026, 11), false);
+
+  console.log("✔ Test 6: Isolasi Dua Pengguna & Unique Constraint (userId, year, month) PASSED");
+}
+
+console.log("\n Seluruh pengujian Programmer 1 BERHASIL 100%!");

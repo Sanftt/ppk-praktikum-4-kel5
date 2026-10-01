@@ -116,8 +116,23 @@ import {
   updateBudget as dbUpdateBudget,
   deleteBudget as dbDeleteBudget,
   getBudgetStats as dbGetBudgetStats,
+  getCurrentMonthlyBudgetSummary as dbGetCurrentMonthlyBudgetSummary,
+  saveMonthlyBudget as dbSaveMonthlyBudget,
+  deleteMonthlyBudget as dbDeleteMonthlyBudget,
   BudgetError,
 } from "./budget";
+
+export async function getCurrentMonthlyBudgetSummary() {
+  return await dbGetCurrentMonthlyBudgetSummary();
+}
+
+export async function saveMonthlyBudget(amount: number) {
+  return await dbSaveMonthlyBudget(amount);
+}
+
+export async function deleteMonthlyBudget() {
+  return await dbDeleteMonthlyBudget();
+}
 
 export async function createBudgetAction(data: {
   month: number;

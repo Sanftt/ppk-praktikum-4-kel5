@@ -1,19 +1,20 @@
 import { prisma } from "./prisma";
+import { getSession } from "./auth";
+import { revalidatePath } from "next/cache";
 
-export interface CreateBudgetInput {
-  userId: string;
-  month: number;
+export type MonthlyBudgetSummary = {
   year: number;
-  budgetAmount: number;
-}
+  month: number;
+  budgetAmount: number | null;
+  spentAmount: number;
+  remainingAmount: number | null;
+  usagePercentage: number | null;
+  status: "NO_BUDGET" | "NORMAL" | "WARNING" | "EXCEEDED";
+};
 
-export interface UpdateBudgetInput {
-  id: string;
-  userId: string;
-  budgetAmount?: number;
-  month?: number;
-  year?: number;
-}
+export type BudgetActionResult =
+  | { success: true }
+  | { success: false; error: string };
 
 export class BudgetError extends Error {
   code?: string;
@@ -26,6 +27,205 @@ export class BudgetError extends Error {
     this.status = options?.status;
   }
 }
+
+/**
+ * Menentukan tahun dan bulan (1-12) menurut zona waktu Asia/Jakarta.
+ */
+export function getJakartaYearMonth(date: Date = new Date()): { year: number; month: number } {
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Jakarta",
+    year: "numeric",
+    month: "numeric",
+  });
+  const parts = formatter.formatToParts(date);
+  let year = date.getFullYear();
+  let month = date.getMonth() + 1;
+  for (const part of parts) {
+    if (part.type === "year") year = parseInt(part.value, 10);
+    if (part.type === "month") month = parseInt(part.value, 10);
+  }
+  return { year, month };
+}
+
+/**
+ * Menghitung rentang tanggal awal bulan (inklusif) dan awal bulan berikutnya (eksklusif)
+ * berdasarkan zona waktu Asia/Jakarta (WIB = UTC+7).
+ */
+export function getJakartaMonthRange(year: number, month: number): { start: Date; end: Date } {
+  const monthStr = String(month).padStart(2, "0");
+  const start = new Date(`${year}-${monthStr}-01T00:00:00.000+07:00`);
+
+  const nextYear = month === 12 ? year + 1 : year;
+  const nextMonth = month === 12 ? 1 : month + 1;
+  const nextMonthStr = String(nextMonth).padStart(2, "0");
+  const end = new Date(`${nextYear}-${nextMonthStr}-01T00:00:00.000+07:00`);
+
+  return { start, end };
+}
+
+/**
+ * Menghitung pemakaian budget untuk bulan berjalan milik pengguna yang sedang login.
+ * Aman dipanggil dari Server Component dashboard.
+ */
+export async function getCurrentMonthlyBudgetSummary(): Promise<MonthlyBudgetSummary> {
+  const session = await getSession();
+  if (!session?.userId) {
+    throw new BudgetError("Unauthorized: Pengguna belum login", { status: 401 });
+  }
+
+  const { year, month } = getJakartaYearMonth();
+  return await calculateMonthlyBudgetSummary(session.userId, year, month);
+}
+
+/**
+ * Fungsi internal untuk menghitung ringkasan budget berdasarkan user, tahun, dan bulan.
+ */
+export async function calculateMonthlyBudgetSummary(
+  userId: string,
+  year: number,
+  month: number
+): Promise<MonthlyBudgetSummary> {
+  const { start, end } = getJakartaMonthRange(year, month);
+
+  // Ambil data budget user untuk bulan & tahun ini
+  const budget = await prisma.monthlyBudget.findUnique({
+    where: {
+      userId_year_month: {
+        userId,
+        year,
+        month,
+      },
+    },
+  });
+
+  // Agregasi transaksi pengeluaran (EXPENSE) di periode Asia/Jakarta
+  const expenseAggregation = await prisma.transaction.aggregate({
+    where: {
+      userId,
+      type: "EXPENSE",
+      date: {
+        gte: start,
+        lt: end,
+      },
+    },
+    _sum: {
+      amount: true,
+    },
+  });
+
+  const rawSpent = expenseAggregation._sum.amount ?? 0;
+  const spentAmount = Math.round(rawSpent);
+
+  if (!budget) {
+    return {
+      year,
+      month,
+      budgetAmount: null,
+      spentAmount,
+      remainingAmount: null,
+      usagePercentage: null,
+      status: "NO_BUDGET",
+    };
+  }
+
+  const budgetAmount = Math.round(budget.budgetAmount);
+  const remainingAmount = budgetAmount - spentAmount;
+  const usagePercentage = budgetAmount > 0 ? (spentAmount / budgetAmount) * 100 : 0;
+
+  let status: "NORMAL" | "WARNING" | "EXCEEDED" = "NORMAL";
+  if (usagePercentage >= 100) {
+    status = "EXCEEDED";
+  } else if (usagePercentage >= 80) {
+    status = "WARNING";
+  } else {
+    status = "NORMAL";
+  }
+
+  return {
+    year,
+    month,
+    budgetAmount,
+    spentAmount,
+    remainingAmount,
+    usagePercentage,
+    status,
+  };
+}
+
+/**
+ * Menyimpan atau memperbarui budget bulan berjalan untuk pengguna sesi.
+ */
+export async function saveMonthlyBudget(amount: number): Promise<BudgetActionResult> {
+  const session = await getSession();
+  if (!session?.userId) {
+    return { success: false, error: "Unauthorized: Pengguna belum login" };
+  }
+
+  if (!Number.isSafeInteger(amount) || amount <= 0) {
+    return { success: false, error: "Nominal budget harus berupa bilangan bulat positif" };
+  }
+
+  try {
+    const { year, month } = getJakartaYearMonth();
+
+    await prisma.monthlyBudget.upsert({
+      where: {
+        userId_year_month: {
+          userId: session.userId,
+          year,
+          month,
+        },
+      },
+      create: {
+        userId: session.userId,
+        year,
+        month,
+        budgetAmount: amount,
+      },
+      update: {
+        budgetAmount: amount,
+      },
+    });
+
+    revalidatePath("/dashboard");
+    return { success: true };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Gagal menyimpan budget";
+    return { success: false, error: message };
+  }
+}
+
+/**
+ * Menghapus budget bulan berjalan milik pengguna sesi.
+ */
+export async function deleteMonthlyBudget(): Promise<BudgetActionResult> {
+  const session = await getSession();
+  if (!session?.userId) {
+    return { success: false, error: "Unauthorized: Pengguna belum login" };
+  }
+
+  try {
+    const { year, month } = getJakartaYearMonth();
+
+    await prisma.monthlyBudget.deleteMany({
+      where: {
+        userId: session.userId,
+        year,
+        month,
+      },
+    });
+
+    revalidatePath("/dashboard");
+    return { success: true };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Gagal menghapus budget";
+    return { success: false, error: message };
+  }
+}
+
+// ----------------------------------------------------
+// Helper queries tambahan untuk API routes
+// ----------------------------------------------------
 
 export async function getBudgets(userId: string) {
   return await prisma.monthlyBudget.findMany({
@@ -43,17 +243,21 @@ export async function getBudgetById(id: string, userId: string) {
 export async function getBudgetByPeriod(userId: string, month: number, year: number) {
   return await prisma.monthlyBudget.findUnique({
     where: {
-      userId_month_year: {
+      userId_year_month: {
         userId,
-        month,
         year,
+        month,
       },
     },
   });
 }
 
-export async function createBudget(input: CreateBudgetInput) {
-  // Cek apakah budget untuk bulan & tahun ini sudah pernah dibuat oleh user
+export async function createBudget(input: {
+  userId: string;
+  month: number;
+  year: number;
+  budgetAmount: number;
+}) {
   const existing = await getBudgetByPeriod(input.userId, input.month, input.year);
   if (existing) {
     throw new BudgetError("Budget untuk bulan dan tahun ini sudah ada", { code: "P2002", status: 409 });
@@ -69,14 +273,18 @@ export async function createBudget(input: CreateBudgetInput) {
   });
 }
 
-export async function updateBudget(input: UpdateBudgetInput) {
-  // Pastikan budget ada dan milik user yang bersangkutan
+export async function updateBudget(input: {
+  id: string;
+  userId: string;
+  budgetAmount?: number;
+  month?: number;
+  year?: number;
+}) {
   const current = await getBudgetById(input.id, input.userId);
   if (!current) {
     throw new BudgetError("Budget tidak ditemukan atau bukan milik Anda", { status: 404 });
   }
 
-  // Jika bulan atau tahun diubah, pastikan tidak konflik dengan budget lain
   if (
     (input.month && input.month !== current.month) ||
     (input.year && input.year !== current.year)
@@ -113,57 +321,35 @@ export async function deleteBudget(id: string, userId: string) {
 }
 
 export async function getBudgetStats(userId: string, month: number, year: number) {
-  const budget = await getBudgetByPeriod(userId, month, year);
+  const summary = await calculateMonthlyBudgetSummary(userId, year, month);
+  const { start, end } = getJakartaMonthRange(year, month);
 
-  const startDate = new Date(year, month - 1, 1, 0, 0, 0, 0);
-  const endDate = new Date(year, month, 0, 23, 59, 59, 999);
-
-  const expenseTransactions = await prisma.transaction.findMany({
+  const transactions = await prisma.transaction.findMany({
     where: {
       userId,
       type: "EXPENSE",
       date: {
-        gte: startDate,
-        lte: endDate,
+        gte: start,
+        lt: end,
       },
     },
     orderBy: { date: "desc" },
   });
 
-  const totalExpense = expenseTransactions.reduce((acc, t) => acc + t.amount, 0);
-  const budgetAmount = budget ? budget.budgetAmount : 0;
-  const remainingBudget = budgetAmount - totalExpense;
-  const percentage = budgetAmount > 0 ? (totalExpense / budgetAmount) * 100 : 0;
-
-  let status: "SAFE" | "WARNING" | "DANGER" = "SAFE";
-  let statusLabel = "Aman";
-
-  if (budgetAmount > 0) {
-    if (percentage >= 100) {
-      status = "DANGER";
-      statusLabel = "Melebihi anggaran";
-    } else if (percentage >= 75) {
-      status = "WARNING";
-      statusLabel = "Mendekati batas";
-    } else {
-      status = "SAFE";
-      statusLabel = "Aman";
-    }
-  } else if (totalExpense > 0) {
-    status = "DANGER";
-    statusLabel = "Melebihi anggaran (Belum ada budget)";
-  }
-
   return {
-    month,
-    year,
-    budget,
-    totalBudget: budgetAmount,
-    totalExpense,
-    remainingBudget,
-    percentage: Number(percentage.toFixed(2)),
-    status,
-    statusLabel,
-    transactions: expenseTransactions,
+    ...summary,
+    totalBudget: summary.budgetAmount ?? 0,
+    totalExpense: summary.spentAmount,
+    remainingBudget: summary.remainingAmount ?? -summary.spentAmount,
+    percentage: summary.usagePercentage ? Number(summary.usagePercentage.toFixed(2)) : 0,
+    statusLabel:
+      summary.status === "EXCEEDED"
+        ? "Melebihi anggaran"
+        : summary.status === "WARNING"
+        ? "Mendekati batas"
+        : summary.status === "NORMAL"
+        ? "Aman"
+        : "Belum ada budget",
+    transactions,
   };
 }
